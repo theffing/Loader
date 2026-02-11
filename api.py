@@ -7,6 +7,7 @@ from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from datetime import date, datetime, timedelta
+from decimal import Decimal
 from typing import List, Optional, Dict, Any
 import mysql.connector
 from mysql.connector import Error
@@ -16,6 +17,7 @@ from contextlib import contextmanager
 import os
 from dotenv import load_dotenv
 import redis
+import uvicorn
 from pydantic import BaseModel
 from sources import get_source_tables, list_sources, normalize_source
 
@@ -139,13 +141,27 @@ def build_cache_key(endpoint: str, **kwargs):
     return ":".join(key_parts)
 
 
+def _serialize_value(value: Any) -> Any:
+    if isinstance(value, (date, datetime)):
+        return value.isoformat()
+    if isinstance(value, Decimal):
+        return float(value)
+    return value
+
+
 def _serialize_date_values(record: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
     if not record:
         return record
     for key, value in list(record.items()):
-        if isinstance(value, (date, datetime)):
-            record[key] = value.isoformat()
+        record[key] = _serialize_value(value)
     return record
+
+
+def _serialize_records(records: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    for row in records:
+        for key, value in list(row.items()):
+            row[key] = _serialize_value(value)
+    return records
 
 
 def resolve_source_or_400(source: Optional[str]) -> tuple[str, str, str]:
@@ -235,6 +251,15 @@ async def get_database_stats(
         })
     except Error as e:
         raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
+
+
+if __name__ == "__main__":
+    uvicorn.run(
+        "api:app",
+        host=os.getenv("API_HOST", "0.0.0.0"),
+        port=int(os.getenv("API_PORT", 8000)),
+        workers=int(os.getenv("API_WORKERS", 1)),
+    )
 
 @app.get("/tickers", tags=["Tickers"])
 async def list_all_tickers(
@@ -355,10 +380,7 @@ async def get_ticker_data(
             cursor.execute(query, (ticker, days, limit))
             results = cursor.fetchall()
             
-            # Convert date objects to strings for JSON serialization
-            for row in results:
-                if 'date' in row and isinstance(row['date'], date):
-                    row['date'] = row['date'].isoformat()
+            results = _serialize_records(results)
             
             cursor.close()
         
@@ -441,10 +463,7 @@ async def get_ticker_date_range(
             cursor.execute(query, (ticker, start_date, end_date))
             results = cursor.fetchall()
             
-            # Convert date objects
-            for row in results:
-                if 'date' in row and isinstance(row['date'], date):
-                    row['date'] = row['date'].isoformat()
+            results = _serialize_records(results)
             
             cursor.close()
         
@@ -524,10 +543,7 @@ async def get_multiple_tickers(
             cursor.execute(query, params)
             results = cursor.fetchall()
             
-            # Convert date objects
-            for row in results:
-                if 'date' in row and isinstance(row['date'], date):
-                    row['date'] = row['date'].isoformat()
+            results = _serialize_records(results)
             
             cursor.close()
         

@@ -56,7 +56,7 @@ mkdir -p raw processed failed
 pip install -r requirements.txt
 
 # Or install individually:
-pip install fastapi uvicorn mysql-connector-python pandas python-dotenv pydantic redis
+pip install fastapi uvicorn mysql-connector-python pandas python-dotenv pydantic redis redis-server
 ```
 
 ### Step 3: Configure Environment
@@ -153,6 +153,7 @@ Run 'python loader.py' to load your CSV files
 ```
 
 #### Step 5.2: Load CSV Data
+
 ```bash
 # Load all CSV files from raw/ directory
 python loader.py
@@ -186,6 +187,12 @@ python pipeline_worker.py
 python pipeline_watch.py --scan-existing
 ```
 
+To run multiple workers from one command:
+
+```bash
+python pipeline_worker.py --num-workers 4
+```
+
 By default, the watcher scans stock-api/raw. If you use per-source subfolders, drop files into:
 
 - stock-api/raw/tiingo
@@ -200,6 +207,8 @@ python pipeline_watch.py --source tiingo
 
 #### Step 5.3: Start the API Server
 ```bash
+python api.py
+
 # With uvicorn directly for production:
 uvicorn api:app --host 0.0.0.0 --port 8000 --workers 2
 ```
@@ -215,6 +224,9 @@ INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
 ## API Endpoints
 
 Once running, visit: http://localhost:8000
+
+Swagger UI (interactive API docs): http://localhost:8000/docs
+ReDoc (clean docs view): http://localhost:8000/redoc
 
 ### Available Endpoints:
 

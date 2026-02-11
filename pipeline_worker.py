@@ -1,7 +1,9 @@
 """RQ worker to process queued CSV ingest jobs."""
 
+import argparse
 import logging
 import os
+import multiprocessing
 
 from redis import Redis
 from rq import Connection, Queue, Worker
@@ -19,15 +21,49 @@ def build_redis_client() -> Redis:
     )
 
 
-def main() -> int:
-    queue_name = os.getenv("PIPELINE_QUEUE_NAME", "ingest")
+def run_worker(queue_name: str, with_scheduler: bool) -> None:
     redis_client = build_redis_client()
     queue = Queue(queue_name, connection=redis_client)
 
     logger.info("Starting worker for queue '%s'", queue_name)
     with Connection(redis_client):
         worker = Worker([queue])
-        worker.work(with_scheduler=True)
+        worker.work(with_scheduler=with_scheduler)
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Run one or more RQ workers")
+    parser.add_argument(
+        "--num-workers",
+        type=int,
+        default=1,
+        help="Number of worker processes to start",
+    )
+    args = parser.parse_args()
+
+    queue_name = os.getenv("PIPELINE_QUEUE_NAME", "ingest")
+    if args.num_workers <= 1:
+        run_worker(queue_name, with_scheduler=True)
+        return 0
+
+    processes: list[multiprocessing.Process] = []
+    for index in range(args.num_workers):
+        process = multiprocessing.Process(
+            target=run_worker,
+            args=(queue_name, index == 0),
+            daemon=False,
+        )
+        process.start()
+        processes.append(process)
+
+    try:
+        for process in processes:
+            process.join()
+    except KeyboardInterrupt:
+        for process in processes:
+            process.terminate()
+        for process in processes:
+            process.join()
 
     return 0
 
