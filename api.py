@@ -139,6 +139,15 @@ def build_cache_key(endpoint: str, **kwargs):
     return ":".join(key_parts)
 
 
+def _serialize_date_values(record: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    if not record:
+        return record
+    for key, value in list(record.items()):
+        if isinstance(value, (date, datetime)):
+            record[key] = value.isoformat()
+    return record
+
+
 def resolve_source_or_400(source: Optional[str]) -> tuple[str, str, str]:
     normalized = normalize_source(source)
     try:
@@ -220,8 +229,8 @@ async def get_database_stats(
         
         return JSONResponse(content={
             "source": source_name,
-            "database_stats": stats,
-            "recent_data": recent,
+            "database_stats": _serialize_date_values(stats),
+            "recent_data": _serialize_date_values(recent),
             "cache_enabled": cache.get_client() is not None
         })
     except Error as e:

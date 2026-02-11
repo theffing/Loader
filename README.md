@@ -73,7 +73,7 @@ Your .env file should look like this:
 
 ```
 # Database Configuration
-DB_HOST=ai-api.umiuni.com
+DB_HOST=localhost
 DB_PORT=3306
 DB_NAME=stock_data
 DB_USER=your_mysql_username
@@ -88,6 +88,16 @@ REDIS_HOST=localhost
 REDIS_PORT=6379
 REDIS_PASSWORD=
 CACHE_TTL=300
+```
+
+Note: MySQL still requires `DB_USER` and `DB_PASSWORD` even when `DB_HOST=localhost`, unless you have explicitly configured passwordless access.
+
+Example: create a local MySQL user and grant access:
+
+```bash
+sudo mysql -e "CREATE USER 'stock_user'@'localhost' IDENTIFIED BY 'strong_password';"
+sudo mysql -e "GRANT ALL PRIVILEGES ON stock_data.* TO 'stock_user'@'localhost';"
+sudo mysql -e "FLUSH PRIVILEGES;"
 ```
 
 ### Step 4: Prepare Your Data
@@ -150,6 +160,22 @@ python loader.py
 
 ### Continuous Pipeline Mode (Redis Queue)
 
+### Redis Setup
+For improved performance with caching:
+
+```bash
+# Install Redis (Ubuntu/Debian)
+sudo apt update
+sudo apt install redis-server
+
+# Start Redis
+sudo systemctl start redis
+sudo systemctl enable redis
+
+# Test Redis
+redis-cli ping
+```
+
 If you want the server to process CSV drops continuously, run the worker and watcher:
 
 ```bash
@@ -174,10 +200,7 @@ python pipeline_watch.py --source tiingo
 
 #### Step 5.3: Start the API Server
 ```bash
-# Start the FastAPI server
-python api.py
-
-# Or with uvicorn directly for production:
+# With uvicorn directly for production:
 uvicorn api:app --host 0.0.0.0 --port 8000 --workers 2
 ```
 
@@ -332,22 +355,6 @@ Dependencies:
 - Sufficient storage for your data (4GB+ recommended)
 - Remote access enabled for ai-api.umiuni.com
 - User with CREATE, INSERT, SELECT privileges
-
-### Optional: Redis Setup
-For improved performance with caching:
-
-```bash
-# Install Redis (Ubuntu/Debian)
-sudo apt update
-sudo apt install redis-server
-
-# Start Redis
-sudo systemctl start redis
-sudo systemctl enable redis
-
-# Test Redis
-redis-cli ping
-```
 
 ### Environment Variables
 See .env.example for all available options:

@@ -15,14 +15,14 @@ def build_redis_client() -> Redis:
         host=os.getenv("REDIS_HOST", "localhost"),
         port=int(os.getenv("REDIS_PORT", 6379)),
         password=os.getenv("REDIS_PASSWORD") or None,
-        decode_responses=True,
+        decode_responses=False,
     )
 
 
 def main() -> int:
     queue_name = os.getenv("PIPELINE_QUEUE_NAME", "ingest")
     redis_client = build_redis_client()
-    queue = Queue(queue_name)
+    queue = Queue(queue_name, connection=redis_client)
 
     logger.info("Starting worker for queue '%s'", queue_name)
     with Connection(redis_client):
