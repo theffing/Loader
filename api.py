@@ -17,6 +17,7 @@ import os
 from dotenv import load_dotenv
 import redis
 from pydantic import BaseModel
+from sources import get_source_tables, list_sources, normalize_source
 
 # Load environment variables
 load_dotenv()
@@ -137,6 +138,16 @@ def build_cache_key(endpoint: str, **kwargs):
         key_parts.append(f"{k}:{v}")
     return ":".join(key_parts)
 
+
+def resolve_source_or_400(source: Optional[str]) -> tuple[str, str, str]:
+    normalized = normalize_source(source)
+    try:
+        data_table, meta_table = get_source_tables(normalized)
+    except ValueError:
+        allowed = ", ".join(list_sources())
+        raise HTTPException(status_code=400, detail=f"Unknown source '{source}'. Allowed: {allowed}")
+    return normalized, data_table, meta_table
+
 # API Endpoints
 @app.get("/", tags=["Root"])
 async def root():
@@ -153,6 +164,7 @@ async def root():
             "health": "/health",
             "stats": "/stats"
         },
+        "sources": list_sources(),
         "docs": "/docs"
     })
 
@@ -179,29 +191,35 @@ async def health_check():
         raise HTTPException(status_code=500, detail=f"Health check failed: {str(e)}")
 
 @app.get("/stats", tags=["Statistics"])
-async def get_database_stats():
+async def get_database_stats(
+    source: Optional[str] = Query("tiingo", description="Data source (tiingo, fmp, yfinance)")
+):
     """Get database statistics"""
+    source_name, data_table, _ = resolve_source_or_400(source)
     try:
         with db.get_connection() as conn:
             cursor = conn.cursor(dictionary=True)
             
-            cursor.execute("""
+            cursor.execute(f"""
                 SELECT 
                     COUNT(*) as total_rows,
                     COUNT(DISTINCT ticker) as total_tickers,
                     MIN(date) as earliest_date,
                     MAX(date) as latest_date
-                FROM ticker_data
+                FROM {data_table}
             """)
             
             stats = cursor.fetchone()
             
-            cursor.execute("SELECT COUNT(*) as recent_rows FROM ticker_data WHERE date >= CURDATE() - INTERVAL 30 DAY")
+            cursor.execute(
+                f"SELECT COUNT(*) as recent_rows FROM {data_table} WHERE date >= CURDATE() - INTERVAL 30 DAY"
+            )
             recent = cursor.fetchone()
             
             cursor.close()
         
         return JSONResponse(content={
+            "source": source_name,
             "database_stats": stats,
             "recent_data": recent,
             "cache_enabled": cache.get_client() is not None
@@ -211,11 +229,13 @@ async def get_database_stats():
 
 @app.get("/tickers", tags=["Tickers"])
 async def list_all_tickers(
+    source: Optional[str] = Query("tiingo", description="Data source (tiingo, fmp, yfinance)"),
     limit: int = Query(100, ge=1, le=1000, description="Maximum number of tickers to return"),
     offset: int = Query(0, ge=0, description="Offset for pagination")
 ):
     """Get list of all available tickers"""
-    cache_key = build_cache_key("tickers", limit=limit, offset=offset)
+    source_name, data_table, _ = resolve_source_or_400(source)
+    cache_key = build_cache_key("tickers", source=source_name, limit=limit, offset=offset)
     redis_client = cache.get_client()
     
     if redis_client:
@@ -227,21 +247,25 @@ async def list_all_tickers(
         with db.get_connection() as conn:
             cursor = conn.cursor()
             
-            cursor.execute("""
+            cursor.execute(
+                f"""
                 SELECT DISTINCT ticker 
-                FROM ticker_data 
+                FROM {data_table}
                 ORDER BY ticker 
                 LIMIT %s OFFSET %s
-            """, (limit, offset))
+                """,
+                (limit, offset),
+            )
             
             tickers = [row[0] for row in cursor.fetchall()]
             
-            cursor.execute("SELECT COUNT(DISTINCT ticker) as total FROM ticker_data")
+            cursor.execute(f"SELECT COUNT(DISTINCT ticker) as total FROM {data_table}")
             total = cursor.fetchone()[0]
             
             cursor.close()
         
         response = {
+            "source": source_name,
             "tickers": tickers,
             "pagination": {
                 "limit": limit,
@@ -261,6 +285,7 @@ async def list_all_tickers(
 @app.get("/stock/{ticker}", response_model=TickerResponse, tags=["Stock Data"])
 async def get_ticker_data(
     ticker: str = Path(..., description="Stock ticker symbol (e.g., AAPL, MSFT)"),
+    source: Optional[str] = Query("tiingo", description="Data source (tiingo, fmp, yfinance)"),
     days: int = Query(30, ge=1, le=3650, description="Number of days of data to return (max 10 years)"),
     fields: Optional[str] = Query(None, description="Comma-separated list of fields to return (date,open,high,low,close,volume,adj_close)"),
     limit: int = Query(1000, ge=1, le=10000, description="Maximum number of records to return")
@@ -275,7 +300,8 @@ async def get_ticker_data(
     - data: Array of stock data records
     """
     ticker = ticker.upper()
-    cache_key = build_cache_key("stock", ticker=ticker, days=days, fields=fields, limit=limit)
+    source_name, data_table, _ = resolve_source_or_400(source)
+    cache_key = build_cache_key("stock", source=source_name, ticker=ticker, days=days, fields=fields, limit=limit)
     redis_client = cache.get_client()
     
     # Try cache first
@@ -310,7 +336,7 @@ async def get_ticker_data(
             
             query = f"""
             SELECT {field_str}
-            FROM ticker_data
+            FROM {data_table}
             WHERE ticker = %s
             AND date >= DATE_SUB(CURDATE(), INTERVAL %s DAY)
             ORDER BY date DESC
@@ -328,6 +354,7 @@ async def get_ticker_data(
             cursor.close()
         
         response = {
+            "source": source_name,
             "ticker": ticker,
             "days": days,
             "count": len(results),
@@ -346,6 +373,7 @@ async def get_ticker_data(
 @app.get("/stock/{ticker}/range", tags=["Stock Data"])
 async def get_ticker_date_range(
     ticker: str = Path(..., description="Stock ticker symbol"),
+    source: Optional[str] = Query("tiingo", description="Data source (tiingo, fmp, yfinance)"),
     start_date: date = Query(..., description="Start date (YYYY-MM-DD)"),
     end_date: date = Query(..., description="End date (YYYY-MM-DD)"),
     fields: Optional[str] = Query(None, description="Comma-separated list of fields to return")
@@ -356,7 +384,15 @@ async def get_ticker_date_range(
     if start_date > end_date:
         raise HTTPException(status_code=400, detail="start_date must be before end_date")
     
-    cache_key = build_cache_key("stock_range", ticker=ticker, start=start_date, end=end_date, fields=fields)
+    source_name, data_table, _ = resolve_source_or_400(source)
+    cache_key = build_cache_key(
+        "stock_range",
+        source=source_name,
+        ticker=ticker,
+        start=start_date,
+        end=end_date,
+        fields=fields,
+    )
     redis_client = cache.get_client()
     
     if redis_client:
@@ -387,7 +423,7 @@ async def get_ticker_date_range(
             
             query = f"""
             SELECT {field_str}
-            FROM ticker_data
+            FROM {data_table}
             WHERE ticker = %s
             AND date BETWEEN %s AND %s
             ORDER BY date ASC
@@ -404,6 +440,7 @@ async def get_ticker_date_range(
             cursor.close()
         
         response = {
+            "source": source_name,
             "ticker": ticker,
             "start_date": start_date.isoformat(),
             "end_date": end_date.isoformat(),
@@ -421,6 +458,7 @@ async def get_ticker_date_range(
 @app.get("/stocks", tags=["Stock Data"])
 async def get_multiple_tickers(
     symbols: str = Query(..., description="Comma-separated list of ticker symbols"),
+    source: Optional[str] = Query("tiingo", description="Data source (tiingo, fmp, yfinance)"),
     date: date = Query(..., description="Specific date to get data for (YYYY-MM-DD)"),
     fields: Optional[str] = Query(None, description="Comma-separated list of fields to return")
 ):
@@ -430,7 +468,8 @@ async def get_multiple_tickers(
     if len(tickers) > 50:
         raise HTTPException(status_code=400, detail="Maximum 50 tickers per request")
     
-    cache_key = build_cache_key("stocks", symbols=symbols, date=date, fields=fields)
+    source_name, data_table, _ = resolve_source_or_400(source)
+    cache_key = build_cache_key("stocks", source=source_name, symbols=symbols, date=date, fields=fields)
     redis_client = cache.get_client()
     
     if redis_client:
@@ -466,7 +505,7 @@ async def get_multiple_tickers(
             
             query = f"""
             SELECT {field_str}
-            FROM ticker_data
+            FROM {data_table}
             WHERE ticker IN ({placeholders})
             AND date = %s
             ORDER BY ticker
@@ -484,6 +523,7 @@ async def get_multiple_tickers(
             cursor.close()
         
         response = {
+            "source": source_name,
             "date": date.isoformat(),
             "tickers_requested": len(tickers),
             "tickers_found": len(results),
@@ -491,4 +531,60 @@ async def get_multiple_tickers(
         }
         
         if redis_client:
-            # Cache for
+            redis_client.setex(cache_key, 300, json.dumps(response))
+
+        return JSONResponse(content=response)
+    except Error as e:
+        raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
+
+
+@app.get("/metadata/{ticker}", response_model=MetadataResponse, tags=["Metadata"])
+async def get_ticker_metadata(
+    ticker: str = Path(..., description="Stock ticker symbol"),
+    source: Optional[str] = Query("tiingo", description="Data source (tiingo, fmp, yfinance)"),
+):
+    """Get metadata for a ticker"""
+    ticker = ticker.upper()
+    source_name, _, meta_table = resolve_source_or_400(source)
+
+    cache_key = build_cache_key("metadata", source=source_name, ticker=ticker)
+    redis_client = cache.get_client()
+
+    if redis_client:
+        cached = redis_client.get(cache_key)
+        if cached:
+            return JSONResponse(content=json.loads(cached))
+
+    try:
+        with db.get_connection() as conn:
+            cursor = conn.cursor(dictionary=True)
+
+            cursor.execute(
+                f"""
+                SELECT ticker, name, first_date, last_date, total_rows, last_updated
+                FROM {meta_table}
+                WHERE ticker = %s
+                """,
+                (ticker,),
+            )
+            result = cursor.fetchone()
+            cursor.close()
+
+        if not result:
+            raise HTTPException(status_code=404, detail="Ticker not found")
+
+        if result.get("first_date"):
+            result["first_date"] = result["first_date"].isoformat()
+        if result.get("last_date"):
+            result["last_date"] = result["last_date"].isoformat()
+        if result.get("last_updated"):
+            result["last_updated"] = result["last_updated"].isoformat()
+
+        response = {"source": source_name, **result}
+
+        if redis_client:
+            redis_client.setex(cache_key, 3600, json.dumps(response))
+
+        return JSONResponse(content=response)
+    except Error as e:
+        raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")

@@ -1,6 +1,6 @@
-# Stock Data API - Tiingo CSV to MySQL + FastAPI
+# Stock Data API - Daily Stock CSV to MySQL + FastAPI
 
-A complete system for loading Tiingo stock CSV data into MySQL and serving it via a high-performance FastAPI REST API with JSON responses.
+A complete system for loading stock CSV data into MySQL and serving it via a high-performance FastAPI REST API with JSON responses.
 
 ## Project Structure
 
@@ -66,7 +66,7 @@ pip install fastapi uvicorn mysql-connector-python pandas python-dotenv pydantic
 cp .env.example .env
 
 # Edit .env with your MySQL credentials
-nano .env
+vi .env
 ```
 
 Your .env file should look like this:
@@ -107,6 +107,20 @@ raw/TSLA.csv
 # date,open,high,low,close,volume,adjOpen,adjHigh,adjLow,adjClose,adjVolume,divCash,splitFactor
 ```
 
+If your Tiingo export is organized as one folder per ticker (for example, tiingo_us_data/<TICKER>/prices_daily.csv), you can flatten it into raw/ with:
+
+```bash
+python tiingo_to_raw.py
+```
+
+Optional flags:
+
+```bash
+python tiingo_to_raw.py --source tiingo_us_data --dest stock-api/raw --overwrite
+```
+
+Use --move to move files instead of copying them.
+
 ### Step 5: Run the System
 
 #### Step 5.1: Setup Database
@@ -134,32 +148,28 @@ Run 'python loader.py' to load your CSV files
 python loader.py
 ```
 
-Expected output:
+### Continuous Pipeline Mode (Redis Queue)
+
+If you want the server to process CSV drops continuously, run the worker and watcher:
+
+```bash
+# Terminal 1: start the worker
+python pipeline_worker.py
+
+# Terminal 2: watch for new files
+python pipeline_watch.py --scan-existing
 ```
-============================================================
-Tiingo CSV to MySQL Loader
-============================================================
 
-Starting CSV import...
-This may take several minutes depending on the number of files
-Progress will be shown below:
+By default, the watcher scans stock-api/raw. If you use per-source subfolders, drop files into:
 
-2024-01-01 10:30:00 - INFO - Found 500 CSV files in 'raw'
-2024-01-01 10:30:01 - INFO - Processing 500 valid CSV files...
-2024-01-01 10:30:05 - INFO - Processed AAPL: Inserted 2520 rows (2010-01-04 to 2023-12-29)
-2024-01-01 10:30:06 - INFO - Processed MSFT: Inserted 2520 rows (2010-01-04 to 2023-12-29)
-...
+- stock-api/raw/tiingo
+- stock-api/raw/fmp
+- stock-api/raw/yfinance
 
-============================================================
-Import completed in 185.45 seconds
-   500 files imported successfully
-   0 files failed
+You can also force a source for all incoming files:
 
-Next steps:
-   1. Check database statistics: python database.py
-   2. Start API server: python api.py
-   3. Test API: http://localhost:8000/stock/AAPL?days=30
-============================================================
+```bash
+python pipeline_watch.py --source tiingo
 ```
 
 #### Step 5.3: Start the API Server
@@ -262,7 +272,7 @@ Key features:
 - Proper indexing for common query patterns
 
 ### 2. loader.py
-Purpose: Load Tiingo CSV files into MySQL database
+Purpose: Manually Load Tiingo CSV files into MySQL database
 
 What it does:
 - Scans raw/ directory for CSV files
@@ -344,17 +354,17 @@ See .env.example for all available options:
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| DB_HOST | Yes | - | MySQL hostname (ai-api.umiuni.com) |
-| DB_PORT | No | 3306 | MySQL port |
-| DB_NAME | Yes | - | Database name |
-| DB_USER | Yes | - | MySQL username |
+| DB_HOST  | Yes | - | MySQL hostname (ai-api.umiuni.com) |
+| DB_PORT  | No  | 3306 | MySQL port |
+| DB_NAME  | Yes | - | Database name |
+| DB_USER  | Yes | - | MySQL username |
 | DB_PASSWORD | Yes | - | MySQL password |
-| API_HOST | No | 0.0.0.0 | API server host |
-| API_PORT | No | 8000 | API server port |
-| REDIS_HOST | No | - | Redis host (leave empty to disable) |
-| REDIS_PORT | No | 6379 | Redis port |
+| API_HOST | No  | 0.0.0.0 | API server host |
+| API_PORT | No  | 8000 | API server port |
+| REDIS_HOST  | No | - | Redis host (leave empty to disable) |
+| REDIS_PORT  | No | 6379 | Redis port |
 | REDIS_PASSWORD | No | - | Redis password |
-| CACHE_TTL | No | 300 | Cache timeout in seconds |
+| CACHE_TTL   | No | 300 | Cache timeout in seconds |
 
 ## Troubleshooting
 

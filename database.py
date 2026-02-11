@@ -6,6 +6,7 @@ from mysql.connector import Error
 import os
 from dotenv import load_dotenv
 import logging
+from sources import list_sources, get_source_tables
 
 # Load environment variables
 load_dotenv()
@@ -68,9 +69,23 @@ class DatabaseManager:
             conn = self.get_connection()
             cursor = conn.cursor()
             
-            # Create main ticker data table
-            create_table_sql = """
-            CREATE TABLE IF NOT EXISTS ticker_data (
+            for source in list_sources():
+                data_table, meta_table = get_source_tables(source)
+                self._create_ticker_tables(cursor, data_table, meta_table)
+
+            conn.commit()
+            cursor.close()
+            conn.close()
+            
+            logger.info("Database setup completed successfully")
+            
+        except Error as e:
+            logger.error(f"Error setting up database: {e}")
+            raise
+
+    def _create_ticker_tables(self, cursor, data_table: str, meta_table: str):
+        create_table_sql = f"""
+            CREATE TABLE IF NOT EXISTS {data_table} (
                 id BIGINT AUTO_INCREMENT PRIMARY KEY,
                 ticker VARCHAR(20) NOT NULL,
                 date DATE NOT NULL,
@@ -94,13 +109,12 @@ class DatabaseManager:
                 INDEX idx_ticker (ticker)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
             """
-            
-            cursor.execute(create_table_sql)
-            logger.info("Table 'ticker_data' created successfully")
-            
-            # Create metadata table for tracking
-            metadata_sql = """
-            CREATE TABLE IF NOT EXISTS ticker_metadata (
+        
+        cursor.execute(create_table_sql)
+        logger.info("Table '%s' created successfully", data_table)
+        
+        metadata_sql = f"""
+            CREATE TABLE IF NOT EXISTS {meta_table} (
                 ticker VARCHAR(20) PRIMARY KEY,
                 name VARCHAR(100),
                 first_date DATE,
@@ -109,65 +123,19 @@ class DatabaseManager:
                 last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
             );
             """
-            
-            cursor.execute(metadata_sql)
-            logger.info("Table 'ticker_metadata' created successfully")
-            
-            conn.commit()
-            cursor.close()
-            conn.close()
-            
-            logger.info("Database setup completed successfully")
-            
-        except Error as e:
-            logger.error(f"Error setting up database: {e}")
-            raise
+        
+        cursor.execute(metadata_sql)
+        logger.info("Table '%s' created successfully", meta_table)
     
     def add_partitions(self):
-        """Add yearly partitions to the table for better performance"""
+        """Add yearly partitions to all data tables for better performance"""
         try:
             conn = self.get_connection()
             cursor = conn.cursor()
             
-            # Check if table is already partitioned
-            cursor.execute("""
-                SELECT PARTITION_NAME 
-                FROM INFORMATION_SCHEMA.PARTITIONS 
-                WHERE TABLE_SCHEMA = %s 
-                AND TABLE_NAME = 'ticker_data'
-                AND PARTITION_NAME IS NOT NULL
-            """, (self.database,))
-            
-            existing_partitions = cursor.fetchall()
-            
-            if not existing_partitions:
-                # Add partitions for years 2010-2025
-                partition_sql = """
-                ALTER TABLE ticker_data 
-                PARTITION BY RANGE (YEAR(date)) (
-                    PARTITION p2010 VALUES LESS THAN (2011),
-                    PARTITION p2011 VALUES LESS THAN (2012),
-                    PARTITION p2012 VALUES LESS THAN (2013),
-                    PARTITION p2013 VALUES LESS THAN (2014),
-                    PARTITION p2014 VALUES LESS THAN (2015),
-                    PARTITION p2015 VALUES LESS THAN (2016),
-                    PARTITION p2016 VALUES LESS THAN (2017),
-                    PARTITION p2017 VALUES LESS THAN (2018),
-                    PARTITION p2018 VALUES LESS THAN (2019),
-                    PARTITION p2019 VALUES LESS THAN (2020),
-                    PARTITION p2020 VALUES LESS THAN (2021),
-                    PARTITION p2021 VALUES LESS THAN (2022),
-                    PARTITION p2022 VALUES LESS THAN (2023),
-                    PARTITION p2023 VALUES LESS THAN (2024),
-                    PARTITION p2024 VALUES LESS THAN (2025),
-                    PARTITION p_future VALUES LESS THAN MAXVALUE
-                )
-                """
-                
-                cursor.execute(partition_sql)
-                logger.info("Yearly partitions added to ticker_data table")
-            else:
-                logger.info("Table is already partitioned")
+            for source in list_sources():
+                data_table, _ = get_source_tables(source)
+                self._add_partitions_for_table(cursor, data_table)
             
             conn.commit()
             cursor.close()
@@ -176,14 +144,53 @@ class DatabaseManager:
         except Error as e:
             logger.error(f"Error adding partitions: {e}")
             # Don't raise error, partitions are optional for functionality
+
+    def _add_partitions_for_table(self, cursor, table_name: str):
+        cursor.execute("""
+            SELECT PARTITION_NAME 
+            FROM INFORMATION_SCHEMA.PARTITIONS 
+            WHERE TABLE_SCHEMA = %s 
+            AND TABLE_NAME = %s
+            AND PARTITION_NAME IS NOT NULL
+        """, (self.database, table_name))
+        
+        existing_partitions = cursor.fetchall()
+        if existing_partitions:
+            logger.info("Table '%s' is already partitioned", table_name)
+            return
+        
+        partition_sql = f"""
+            ALTER TABLE {table_name}
+            PARTITION BY RANGE (YEAR(date)) (
+                PARTITION p2010 VALUES LESS THAN (2011),
+                PARTITION p2011 VALUES LESS THAN (2012),
+                PARTITION p2012 VALUES LESS THAN (2013),
+                PARTITION p2013 VALUES LESS THAN (2014),
+                PARTITION p2014 VALUES LESS THAN (2015),
+                PARTITION p2015 VALUES LESS THAN (2016),
+                PARTITION p2016 VALUES LESS THAN (2017),
+                PARTITION p2017 VALUES LESS THAN (2018),
+                PARTITION p2018 VALUES LESS THAN (2019),
+                PARTITION p2019 VALUES LESS THAN (2020),
+                PARTITION p2020 VALUES LESS THAN (2021),
+                PARTITION p2021 VALUES LESS THAN (2022),
+                PARTITION p2022 VALUES LESS THAN (2023),
+                PARTITION p2023 VALUES LESS THAN (2024),
+                PARTITION p2024 VALUES LESS THAN (2025),
+                PARTITION p_future VALUES LESS THAN MAXVALUE
+            )
+        """
+        
+        cursor.execute(partition_sql)
+        logger.info("Yearly partitions added to %s", table_name)
     
-    def get_ticker_list(self):
+    def get_ticker_list(self, table_name: str = "ticker_data"):
         """Get list of all tickers in database"""
         try:
             conn = self.get_connection()
             cursor = conn.cursor()
             
-            cursor.execute("SELECT DISTINCT ticker FROM ticker_data ORDER BY ticker")
+            cursor.execute(f"SELECT DISTINCT ticker FROM {table_name} ORDER BY ticker")
             tickers = [row[0] for row in cursor.fetchall()]
             
             cursor.close()
@@ -195,19 +202,19 @@ class DatabaseManager:
             logger.error(f"Error getting ticker list: {e}")
             return []
     
-    def get_ticker_stats(self):
+    def get_ticker_stats(self, table_name: str = "ticker_data"):
         """Get statistics about the database"""
         try:
             conn = self.get_connection()
             cursor = conn.cursor(dictionary=True)
             
-            cursor.execute("""
+            cursor.execute(f"""
                 SELECT 
                     COUNT(*) as total_rows,
                     COUNT(DISTINCT ticker) as total_tickers,
                     MIN(date) as earliest_date,
                     MAX(date) as latest_date
-                FROM ticker_data
+                FROM {table_name}
             """)
             
             stats = cursor.fetchone()

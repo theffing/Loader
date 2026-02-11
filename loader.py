@@ -10,6 +10,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import logging
 from database import db_manager
+from sources import get_source_tables
 from dotenv import load_dotenv
 
 # Load environment variables
@@ -23,10 +24,22 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 class CSVLoader:
-    def __init__(self, csv_dir='raw'):
+    def __init__(
+        self,
+        csv_dir='raw',
+        processed_dir='processed',
+        failed_dir='failed',
+        table_name=None,
+        metadata_table=None,
+        source=None,
+    ):
         self.csv_dir = csv_dir
-        self.processed_dir = 'processed'
-        self.failed_dir = 'failed'
+        self.processed_dir = processed_dir
+        self.failed_dir = failed_dir
+        if source:
+            table_name, metadata_table = get_source_tables(source)
+        self.table_name = table_name or 'ticker_data'
+        self.metadata_table = metadata_table or 'ticker_metadata'
         
         # Create directories if they don't exist
         os.makedirs(self.processed_dir, exist_ok=True)
@@ -128,7 +141,7 @@ class CSVLoader:
             
             placeholders = ', '.join(['%s'] * len(columns))
             insert_sql = f"""
-            INSERT INTO ticker_data ({', '.join(columns)})
+            INSERT INTO {self.table_name} ({', '.join(columns)})
             VALUES ({placeholders})
             ON DUPLICATE KEY UPDATE
                 open = VALUES(open),
@@ -156,8 +169,8 @@ class CSVLoader:
                 rows_inserted += cursor.rowcount
             
             # Update metadata
-            metadata_sql = """
-            INSERT INTO ticker_metadata (ticker, first_date, last_date, total_rows)
+            metadata_sql = f"""
+            INSERT INTO {self.metadata_table} (ticker, first_date, last_date, total_rows)
             VALUES (%s, %s, %s, %s)
             ON DUPLICATE KEY UPDATE
                 first_date = LEAST(first_date, VALUES(first_date)),
@@ -248,7 +261,7 @@ class CSVLoader:
         
         if successful > 0:
             # Show database statistics
-            stats = db_manager.get_ticker_stats()
+            stats = db_manager.get_ticker_stats(table_name=self.table_name)
             if stats:
                 logger.info(f"Total rows in database: {stats['total_rows']:,}")
                 logger.info(f"Total tickers: {stats['total_tickers']}")
@@ -259,28 +272,40 @@ class CSVLoader:
 
 def main():
     """Main function to run the loader"""
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Load CSV files into MySQL")
+    parser.add_argument("--source", default="tiingo", help="Data source name")
+    parser.add_argument("--csv-dir", default="raw", help="Directory with CSV files")
+    parser.add_argument("--processed-dir", default="processed", help="Processed output directory")
+    parser.add_argument("--failed-dir", default="failed", help="Failed output directory")
+    parser.add_argument("--workers", type=int, default=2, help="Number of worker threads")
+    args = parser.parse_args()
+
     print("\n" + "="*60)
-    print("Tiingo CSV to MySQL Loader")
+    print(f"CSV to MySQL Loader ({args.source})")
     print("="*60)
     
-    # Check for raw directory
-    if not os.path.exists('raw'):
-        print("\n Creating 'raw' directory...")
-        os.makedirs('raw')
-        print("Please place your Tiingo CSV files in the 'raw' directory")
+    if not os.path.exists(args.csv_dir):
+        print(f"\n Creating '{args.csv_dir}' directory...")
+        os.makedirs(args.csv_dir)
+        print("Please place your CSV files in the directory above")
         print("Each file should be named like 'AAPL.csv', 'MSFT.csv', etc.")
         return
     
-    # Initialize loader
-    loader = CSVLoader(csv_dir='raw')
+    loader = CSVLoader(
+        csv_dir=args.csv_dir,
+        processed_dir=args.processed_dir,
+        failed_dir=args.failed_dir,
+        source=args.source,
+    )
     
-    # Load all files
     print("\n Starting CSV import...")
     print("This may take several minutes depending on the number of files")
     print("Progress will be shown below:\n")
     
     start_time = time.time()
-    successful, failed = loader.load_all_files(max_workers=2)
+    successful, failed = loader.load_all_files(max_workers=args.workers)
     end_time = time.time()
     
     elapsed = end_time - start_time
@@ -290,7 +315,7 @@ def main():
     print(f"   {successful} files imported successfully")
     
     if failed > 0:
-        print(f"   ⚠️  {failed} files failed (check 'failed' directory)")
+        print(f"   ⚠️  {failed} files failed (check '{args.failed_dir}' directory)")
     
     print("\n📊 Next steps:")
     print("   1. Check database statistics: python database.py")
