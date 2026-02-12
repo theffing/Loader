@@ -1,36 +1,10 @@
-"""Source table mapping for market data providers."""
+"""Table names for stock data storage."""
 
-from __future__ import annotations
-
-SOURCE_TABLES = {
-    "tiingo": {
-        "data": "ticker_data",
-        "meta": "ticker_metadata",
-    },
-    "fmp": {
-        "data": "ticker_data_fmp",
-        "meta": "ticker_metadata_fmp",
-    },
-    "yfinance": {
-        "data": "ticker_data_yfinance",
-        "meta": "ticker_metadata_yfinance",
-    },
-}
+# Table names (simplified from multi-source architecture)
+DATA_TABLE = "ticker_data"
+METADATA_TABLE = "ticker_metadata"
 
 
-def normalize_source(source: str | None) -> str:
-    if not source:
-        return "tiingo"
-    return source.strip().lower()
-
-
-def get_source_tables(source: str | None) -> tuple[str, str]:
-    normalized = normalize_source(source)
-    tables = SOURCE_TABLES.get(normalized)
-    if not tables:
-        raise ValueError(f"Unknown source: {source}")
-    return tables["data"], tables["meta"]
-
-
-def list_sources() -> list[str]:
-    return sorted(SOURCE_TABLES.keys())
+def get_tables() -> tuple[str, str]:
+    """Return the data and metadata table names."""
+    return DATA_TABLE, METADATA_TABLE

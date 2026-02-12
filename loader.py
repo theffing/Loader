@@ -10,7 +10,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import logging
 from database import db_manager
-from sources import get_source_tables
+from sources import get_tables, DATA_TABLE, METADATA_TABLE
 from dotenv import load_dotenv
 
 # Load environment variables
@@ -29,17 +29,12 @@ class CSVLoader:
         csv_dir='raw',
         processed_dir='processed',
         failed_dir='failed',
-        table_name=None,
-        metadata_table=None,
-        source=None,
     ):
         self.csv_dir = csv_dir
         self.processed_dir = processed_dir
         self.failed_dir = failed_dir
-        if source:
-            table_name, metadata_table = get_source_tables(source)
-        self.table_name = table_name or 'ticker_data'
-        self.metadata_table = metadata_table or 'ticker_metadata'
+        self.table_name = DATA_TABLE
+        self.metadata_table = METADATA_TABLE
         
         # Create directories if they don't exist
         os.makedirs(self.processed_dir, exist_ok=True)

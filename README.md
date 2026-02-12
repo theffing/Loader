@@ -245,9 +245,9 @@ ReDoc (clean docs view): http://localhost:8000/redoc
 
 ## Usage Examples
 
-### Example 1: Get Apple stock for last 30 days
+### Example 1: Get Apple stock for last 120 days
 ```bash
-curl "http://localhost:8000/stock/AAPL?days=30"
+curl "http://localhost:8000/stock/AAPL?days=120"
 ```
 
 Response:

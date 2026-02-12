@@ -6,7 +6,7 @@ from mysql.connector import Error
 import os
 from dotenv import load_dotenv
 import logging
-from sources import list_sources, get_source_tables
+from sources import get_tables, DATA_TABLE, METADATA_TABLE
 
 # Load environment variables
 load_dotenv()
@@ -69,9 +69,8 @@ class DatabaseManager:
             conn = self.get_connection()
             cursor = conn.cursor()
             
-            for source in list_sources():
-                data_table, meta_table = get_source_tables(source)
-                self._create_ticker_tables(cursor, data_table, meta_table)
+            data_table, meta_table = get_tables()
+            self._create_ticker_tables(cursor, data_table, meta_table)
 
             conn.commit()
             cursor.close()
@@ -128,14 +127,12 @@ class DatabaseManager:
         logger.info("Table '%s' created successfully", meta_table)
     
     def add_partitions(self):
-        """Add yearly partitions to all data tables for better performance"""
+        """Add yearly partitions to the data table for better performance"""
         try:
             conn = self.get_connection()
             cursor = conn.cursor()
             
-            for source in list_sources():
-                data_table, _ = get_source_tables(source)
-                self._add_partitions_for_table(cursor, data_table)
+            self._add_partitions_for_table(cursor, DATA_TABLE)
             
             conn.commit()
             cursor.close()
@@ -184,13 +181,13 @@ class DatabaseManager:
         cursor.execute(partition_sql)
         logger.info("Yearly partitions added to %s", table_name)
     
-    def get_ticker_list(self, table_name: str = "ticker_data"):
+    def get_ticker_list(self):
         """Get list of all tickers in database"""
         try:
             conn = self.get_connection()
             cursor = conn.cursor()
             
-            cursor.execute(f"SELECT DISTINCT ticker FROM {table_name} ORDER BY ticker")
+            cursor.execute(f"SELECT DISTINCT ticker FROM {DATA_TABLE} ORDER BY ticker")
             tickers = [row[0] for row in cursor.fetchall()]
             
             cursor.close()
@@ -202,7 +199,7 @@ class DatabaseManager:
             logger.error(f"Error getting ticker list: {e}")
             return []
     
-    def get_ticker_stats(self, table_name: str = "ticker_data"):
+    def get_ticker_stats(self):
         """Get statistics about the database"""
         try:
             conn = self.get_connection()
@@ -214,7 +211,7 @@ class DatabaseManager:
                     COUNT(DISTINCT ticker) as total_tickers,
                     MIN(date) as earliest_date,
                     MAX(date) as latest_date
-                FROM {table_name}
+                FROM {DATA_TABLE}
             """)
             
             stats = cursor.fetchone()

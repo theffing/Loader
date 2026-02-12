@@ -12,7 +12,6 @@ from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
 
 from pipeline_jobs import process_csv_job
-from sources import list_sources
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -27,7 +26,7 @@ def build_redis_client() -> Redis:
     )
 
 
-def enqueue_file(queue: Queue, file_path: Path, source: str | None) -> None:
+def enqueue_file(queue: Queue, file_path: Path) -> None:
     if file_path.suffix.lower() != ".csv":
         return
     if not file_path.exists():
@@ -36,26 +35,24 @@ def enqueue_file(queue: Queue, file_path: Path, source: str | None) -> None:
     queue.enqueue(
         process_csv_job,
         str(file_path),
-        source,
         job_timeout=1800,
     )
     logger.info("Enqueued %s", file_path)
 
 
 class CSVEventHandler(FileSystemEventHandler):
-    def __init__(self, queue: Queue, source: str | None):
+    def __init__(self, queue: Queue):
         self.queue = queue
-        self.source = source
 
     def on_created(self, event):
         if event.is_directory:
             return
-        enqueue_file(self.queue, Path(event.src_path), self.source)
+        enqueue_file(self.queue, Path(event.src_path))
 
     def on_moved(self, event):
         if event.is_directory:
             return
-        enqueue_file(self.queue, Path(event.dest_path), self.source)
+        enqueue_file(self.queue, Path(event.dest_path))
 
 
 def main() -> int:
@@ -64,11 +61,6 @@ def main() -> int:
         "--raw-dir",
         default=os.getenv("PIPELINE_RAW_DIR", "stock-api/raw"),
         help="Raw directory to watch",
-    )
-    parser.add_argument(
-        "--source",
-        default=None,
-        help="Force a source name for all files",
     )
     parser.add_argument(
         "--scan-existing",
@@ -86,19 +78,14 @@ def main() -> int:
 
     if args.scan_existing:
         for csv_path in raw_dir.rglob("*.csv"):
-            enqueue_file(queue, csv_path, args.source)
+            enqueue_file(queue, csv_path)
 
-    event_handler = CSVEventHandler(queue, args.source)
+    event_handler = CSVEventHandler(queue)
     observer = Observer()
 
-    if args.source:
-        observer.schedule(event_handler, str(raw_dir), recursive=True)
-    else:
-        observer.schedule(event_handler, str(raw_dir), recursive=True)
+    observer.schedule(event_handler, str(raw_dir), recursive=True)
 
     logger.info("Watching %s for CSV files", raw_dir)
-    if not args.source:
-        logger.info("Sources: %s", ", ".join(list_sources()))
 
     observer.start()
     try:
