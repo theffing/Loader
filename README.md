@@ -1,16 +1,16 @@
-# Stock Data Insertion Pipeline
+# FMP Stock Data Insertion Pipeline
 
-A high-performance stock market data ingestion system that loads CSV files from Financial Modeling Prep (FMP) into a local SQLite database with automated processing, REST API access, and real-time file monitoring.
+A high-performance stock market data ingestion system that loads CSV files from Financial Modeling Prep (FMP) into a remote MySQL database with automated processing, REST API access, and real-time file monitoring.
 
 ## What This Service Does
 
 This pipeline system provides:
 
 - **Automated CSV Processing**: Watches directories for new stock data CSV files and automatically processes them
-- **High-Precision Storage**: Stores stock data with high precision in SQLite
+- **High-Precision Storage**: Stores stock data with DECIMAL(50,25) precision in MySQL with yearly partitions (1990-2026)
 - **Parallel Processing**: Uses Redis Queue (RQ) with multiple workers for concurrent file imports
 - **REST API**: FastAPI-based API with 8 endpoints for querying stock data, metadata, and statistics
-- **Local Database**: Uses SQLite for simple, file-based data storage with no server required
+- **Remote Database**: Connects to MySQL at ai-api.umiuni.com for centralized data storage
 - **Bulk Import**: Batch processing with 10,000 row chunks for optimal performance
 
 ## 📁 Directory Structure
@@ -52,8 +52,8 @@ Legacy directories (backward compatibility):
 ### Source Code (`src/`)
 
 - **api.py** - FastAPI REST API with endpoints for stock data queries, health checks, and queue status
-- **database.py** - DatabaseManager class for SQLite connections and schema creation
-- **loader.py** - CSVLoader class that processes FMP CSV files and bulk inserts into SQLite
+- **database.py** - DatabaseManager class for MySQL connections, schema creation, and partition management
+- **loader.py** - CSVLoader class that processes FMP CSV files and bulk inserts into MySQL
 - **sources.py** - Defines table name constants (DATA_TABLE, METADATA_TABLE) used across modules
 - **pipeline_jobs.py** - RQ job function for async CSV processing with file movement to processed/failed directories
 - **pipeline_watch.py** - Watchdog-based file monitor that queues CSV files for processing when detected
@@ -68,7 +68,7 @@ Legacy directories (backward compatibility):
 
 - **start_api.sh** - Convenience wrapper to start the FastAPI server (`python -m src.api`)
 - **start_pipeline.sh** - Convenience wrapper to start the complete pipeline (`./scripts/run_pipeline.sh`)
-- **requirements.txt** - Python package dependencies (FastAPI, pandas, Redis, RQ, watchdog)
+- **requirements.txt** - Python package dependencies (FastAPI, MySQL, pandas, Redis, RQ, watchdog)
 - **.env.example** - Template showing all required environment variables with placeholder values
 - **.gitignore** - Protects sensitive files (.env, data/, *.sql, *.key) from being committed
 
@@ -91,7 +91,11 @@ nano .env  # or use your preferred editor
 ### Environment Variables
 
 **Database Configuration**
-- `DB_PATH` - Path to SQLite database file (default: data/stock_data.db)
+- `DB_HOST` - MySQL server hostname (e.g., ai-api.umiuni.com)
+- `DB_PORT` - MySQL port (default: 3306)
+- `DB_NAME` - Database name (e.g., fmp_api or stock_data)
+- `DB_USER` - MySQL username with INSERT/SELECT permissions
+- `DB_PASSWORD` - MySQL password (NEVER commit this!)
 
 **API Configuration**
 - `API_HOST` - API bind address (0.0.0.0 for all interfaces, 127.0.0.1 for localhost only)
@@ -118,8 +122,9 @@ nano .env  # or use your preferred editor
 3. **MySQL database** accessible with credentials
 4. **Virtual environment** (recommended)
 
-### Initial Setup (for pipeline mode)
-3``bash
+### Initial Setup
+
+```bash
 # 1. Clone the repository
 git clone <your-repo-url>
 cd fmp_stock_data_insertion
@@ -135,7 +140,7 @@ pip install -r requirements.txt
 # 4. Configure environment
 cp .env.example .env
 nano .env  # Edit with your credentials
-settings (database path, etc.)
+
 # 5. Setup database (ONE TIME ONLY)
 python -m src.database
 ```
@@ -212,25 +217,25 @@ open http://localhost:8000/docs
 ## 🗄️ Database Schema
 
 **Table: ticker_data**
-- `symbol` TEXT - Stock ticker symbol
-- `date` TEXT - Trading date (YYYY-MM-DD format)
-- `open`, `high`, `low`, `close` - REAL - Price data
-- `adjClose`, `adjOpen`, `adjHigh`, `adjLow` - REAL - Adjusted prices
-- `volume`, `unadjustedVolume` - INTEGER - Trading volumes
-- `change_value`, `changePercent`, `vwap`, `adjVolume` - REAL - Calculated metrics
-- Indexed on (symbol, date) for fast queries
+- `symbol` VARCHAR(10) - Stock ticker symbol
+- `date` DATE - Trading date
+- `open`, `high`, `low`, `close` - DECIMAL(50,25) - Price data with ultra-high precision
+- `adjClose` - DOUBLE - Adjusted close price
+- `volume`, `unadjustedVolume` - BIGINT - Trading volumes
+- `change_value`, `changePercent`, `vwap`, `changeOverTime` - DOUBLE - Calculated metrics
+- `adjOpen`, `adjHigh`, `adjLow` - DOUBLE - Adjusted prices
+- Partitioned by year (1990-2026) for query performance
 
 **Table: ticker_metadata**
-- `symbol` TEXT PRIMARY KEY
-- `first_date`, `last_date` - TEXT - Date range of available data
-- `total_rows` - INTEGER - Total records for this ticker
-- `last_updated` - TEXT - Timestamp of last modification
+- `symbol` VARCHAR(10) PRIMARY KEY
+- `first_date`, `last_date` - Date range of available data
+- `row_count` - Total records for this ticker
+- `last_updated` - Timestamp of last modification
 
 ## Features
 
 -  High-precision DECIMAL(50,25) storage for price data
--  Yearly table paREAL storage for price data
--  Efficient indexing for fast queries
+-  Yearly table partitioning (1990-2026) for optimized queries
 -  Parallel processing with 4+ concurrent workers
 -  Automatic file monitoring and ingestion
 -  Batch inserts (10,000 rows) for performance
@@ -239,7 +244,7 @@ open http://localhost:8000/docs
 -  Redis-based job queue for scalability
 -  Metadata tracking per ticker
 -  Environment-based configuration
--  No database server required - SQLite is file-based
+
 ## Notes
 
 - **database.py** is a ONE-TIME setup script - only run during initial database creation
@@ -253,11 +258,11 @@ open http://localhost:8000/docs
 
 See [requirements.txt](requirements.txt) for full list. Key packages:
 - **FastAPI** - Modern web framework for REST API
+- **MySQL Connector** - Database driver
 - **Pandas** - CSV processing and data manipulation
 - **Redis & RQ** - Job queue for async processing
 - **Watchdog** - File system monitoring
 - **Uvicorn** - ASGI server for FastAPI
-- **SQLite3** - Built-in Python database (no separate installation needed)
 
 ## 📄 License
 

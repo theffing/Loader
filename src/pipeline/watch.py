@@ -12,8 +12,8 @@ from rq import Queue
 from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
 
-from pipeline_jobs import process_csv_job
-from database import db_manager
+from src.pipeline.jobs import process_csv_job
+from src.database.database import db_manager
 
 # Load environment variables
 load_dotenv()
@@ -63,19 +63,16 @@ class CSVEventHandler(FileSystemEventHandler):
 def main() -> int:
     parser = argparse.ArgumentParser(description="Watch raw directories and enqueue CSV jobs for remote database")
     parser.add_argument(
-        "--raw-dir",
-        default=os.getenv("PIPELINE_RAW_DIR", "raw"),
-        help="Raw directory to watch",
-    )
-    parser.add_argument(
         "--scan-existing",
         action="store_true",
         help="Enqueue existing CSV files on startup",
     )
     args = parser.parse_args()
 
-    raw_dir = Path(args.raw_dir).resolve()
-    raw_dir.mkdir(parents=True, exist_ok=True)
+    raw_dir = Path("data/raw").resolve()
+    if not raw_dir.exists():
+        logger.error(f"Raw directory '{raw_dir}' does not exist. Exiting.")
+        return 1
 
     logger.info(f"Remote database: {db_manager.host}:{db_manager.port}")
     logger.info(f"Database name: {db_manager.database}")

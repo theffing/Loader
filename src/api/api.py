@@ -19,7 +19,7 @@ from dotenv import load_dotenv
 import redis
 import uvicorn
 from pydantic import BaseModel
-from sources import get_tables, DATA_TABLE, METADATA_TABLE
+from src.database.sources import get_tables, DATA_TABLE, METADATA_TABLE
 
 # Load environment variables
 load_dotenv()

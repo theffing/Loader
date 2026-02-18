@@ -8,7 +8,7 @@ from dotenv import load_dotenv
 
 from redis import Redis
 from rq import Connection, Queue, Worker
-from database import db_manager
+from src.database.database import db_manager
 
 # Load environment variables
 load_dotenv()

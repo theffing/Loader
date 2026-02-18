@@ -27,7 +27,7 @@ trap cleanup SIGINT SIGTERM
 
 # Start workers in background
 echo "Starting 4 pipeline workers..."
-python -m src.pipeline_worker --num-workers 4 &
+python3 -m src.pipeline.worker --num-workers 4 &
 WORKER_PID=$!
 
 # Give workers a moment to start
@@ -36,7 +36,7 @@ sleep 2
 # Start watcher
 echo "Starting file watcher..."
 echo ""
-python -m src.pipeline_watch --scan-existing
+python3 -m src.pipeline.watch --scan-existing
 
 # If watcher exits, cleanup
 kill $WORKER_PID 2>/dev/null

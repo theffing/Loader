@@ -6,9 +6,9 @@ import shutil
 from pathlib import Path
 from dotenv import load_dotenv
 
-from loader import CSVLoader
-from database import db_manager
-from sources import get_tables, DATA_TABLE, METADATA_TABLE
+from src.loader.loader import CSVLoader
+from src.database.database import db_manager
+from src.database.sources import get_tables, DATA_TABLE, METADATA_TABLE
 
 # Load environment variables
 load_dotenv()

@@ -1,5 +1,5 @@
 """
-loader.py - Load Tiingo CSV files to SQLite
+loader.py - Load Tiingo CSV files to MySQL
 """
 import os
 import glob
@@ -9,8 +9,8 @@ from datetime import datetime
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import logging
-from database import db_manager
-from sources import get_tables, DATA_TABLE, METADATA_TABLE
+from src.database.database import db_manager
+from src.database.sources import get_tables, DATA_TABLE, METADATA_TABLE
 from dotenv import load_dotenv
 
 # Load environment variables
@@ -144,16 +144,16 @@ class CSVLoader:
             # Filter to only columns that exist in the DataFrame
             columns = [col for col in all_columns if col in df.columns]
             
-            placeholders = ', '.join(['?'] * len(columns))
+            placeholders = ', '.join(['%s'] * len(columns))
             
-            # Build UPDATE clause for SQLite UPSERT
+            # Build UPDATE clause for columns (excluding symbol and date which are in unique key)
             update_columns = [col for col in columns if col not in ['symbol', 'date']]
-            update_clause = ', '.join([f"{col} = excluded.{col}" for col in update_columns])
+            update_clause = ', '.join([f"{col} = VALUES({col})" for col in update_columns])
             
             insert_sql = f"""
             INSERT INTO {self.table_name} ({', '.join(columns)})
             VALUES ({placeholders})
-            ON CONFLICT(symbol, date) DO UPDATE SET
+            ON DUPLICATE KEY UPDATE
                 {update_clause}
             """
             
@@ -167,18 +167,18 @@ class CSVLoader:
                 cursor.executemany(insert_sql, data_tuples)
                 rows_inserted += cursor.rowcount
             
-            # Update metadata using SQLite UPSERT
+            # Update metadata
             metadata_sql = f"""
             INSERT INTO {self.metadata_table} (symbol, first_date, last_date, total_rows)
-            VALUES (?, ?, ?, ?)
-            ON CONFLICT(symbol) DO UPDATE SET
-                first_date = MIN(first_date, excluded.first_date),
-                last_date = MAX(last_date, excluded.last_date),
-                total_rows = excluded.total_rows,
+            VALUES (%s, %s, %s, %s)
+            ON DUPLICATE KEY UPDATE
+                first_date = LEAST(first_date, VALUES(first_date)),
+                last_date = GREATEST(last_date, VALUES(last_date)),
+                total_rows = VALUES(total_rows),
                 last_updated = CURRENT_TIMESTAMP
             """
             
-            cursor.execute(metadata_sql, (ticker, str(first_date), str(last_date), total_rows))
+            cursor.execute(metadata_sql, (ticker, first_date, last_date, total_rows))
             
             conn.commit()
             cursor.close()
@@ -273,7 +273,7 @@ def main():
     """Main function to run the loader"""
     import argparse
 
-    parser = argparse.ArgumentParser(description="Load CSV files into local SQLite database")
+    parser = argparse.ArgumentParser(description="Load FMP CSV files into remote MySQL")
     parser.add_argument("--csv-dir", default="raw", help="Directory with CSV files")
     parser.add_argument("--processed-dir", default="processed", help="Processed output directory")
     parser.add_argument("--failed-dir", default="failed", help="Failed output directory")
@@ -281,7 +281,7 @@ def main():
     args = parser.parse_args()
 
     print("\n" + "="*60)
-    print("CSV to Local SQLite Loader")
+    print("FMP CSV to Remote MySQL Loader")
     print("="*60)
     
     if not os.path.exists(args.csv_dir):
@@ -297,7 +297,7 @@ def main():
         failed_dir=args.failed_dir,
     )
     
-    print("\n🚀 Starting CSV import to local database...")
+    print("\n🚀 Starting CSV import to ai-api.umiuni.com...")
     print("This may take several minutes depending on the number of files")
     print("Progress will be shown below:\n")
     
